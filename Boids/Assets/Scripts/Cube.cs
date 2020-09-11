@@ -27,11 +27,21 @@ public class Cube : MonoBehaviour
     /// </summary>
     private IEnumerator Flocking()
     {
-        _direction = Cohesion() + Alignment() - Separation() /*+ BoundaryRepulsion()*/;
+        _direction = CalculateDirection().normalized * _cubeProperties.speed;
+
+        //Detecta si pueden existir colisiones con obstaculos, en caso afirmativo cambia la dirección del cubo
+        RaycastHit hit;
+        if (Physics.SphereCast(transform.position, _cubeProperties.boundaryRadius, _direction, out hit, _cubeProperties.boundaryDetectDistance, _cubeProperties.evadeLayer))
+        {
+            _direction = BoundaryRepulsion().normalized * _cubeProperties.speed;
+        }
+
+        //Evita sobrepasar el límite de velocidad
         if (_direction.magnitude > _cubeProperties.speed)
         {
             _direction = _direction.normalized * _cubeProperties.speed;
         }
+
         transform.position += _direction * Time.deltaTime;
         transform.rotation = Quaternion.LookRotation(_direction);
         yield return new WaitForEndOfFrame();
@@ -39,77 +49,106 @@ public class Cube : MonoBehaviour
     }
 
     /// <summary>
-    /// Retorna un vector con la nueva posición de un cubo con respecto a un grupo de estos sin separarse
+    /// Retorna vector con la suma de vectores de cohesion, alineamiento y separación para determinar la 
+    /// dirección de un cubo
     /// </summary>
-    private Vector3 Cohesion()
+    private Vector3 CalculateDirection()
     {
         Collider[] hitRadius = Physics.OverlapSphere(transform.position, _cubeProperties.actionRadius, _cubeProperties.layerMask);
-        int neighbours = 0;
-        Vector3 averagePosition = Vector3.zero;
-        foreach(Collider cubeCollider in hitRadius)
-        {
-            averagePosition += cubeCollider.transform.position;
-            neighbours++;
-        }
-        
-        if(neighbours > 0)
-        {
-            averagePosition /= neighbours;
-            return Vector3.Lerp(Vector3.zero, averagePosition, averagePosition.magnitude / _cubeProperties.actionRadius);
-        }
-        return Vector3.zero;
-    }
+        Collider[] evadeRadius = Physics.OverlapSphere(transform.position, _cubeProperties.evadeRadius, _cubeProperties.layerMask);
+        int neighbors = 0;
+        Vector3 averagePosition = Vector3.zero; // Vector de posición para la cohesión
+        Vector3 averageDirection = Vector3.zero; // Vector de dirección para el alineamiento
+        Vector3 averageSeparation = Vector3.zero; // Vector de posición para la separación
 
-    /// <summary>
-    /// Retorna un vector con la dirección que debe tomar un cubo con respecto a la dirección del grupo
-    /// </summary>
-    private Vector3 Alignment()
-    {
-        Collider[] hitRadius = Physics.OverlapSphere(transform.position, _cubeProperties.actionRadius, _cubeProperties.layerMask);
-        int neighbours = 0;
-        Vector3 averageDirection = Vector3.zero;
+        //Busca el promedio de cohesión y de alineamiento
         foreach (Collider cubeCollider in hitRadius)
         {
+            averagePosition += cubeCollider.transform.position;
             averageDirection += cubeCollider.gameObject.GetComponent<Cube>().Direction;
-            neighbours++;
+            if (cubeCollider != gameObject.GetComponent<Collider>())
+                neighbors++;
         }
 
-        if (neighbours > 0)
+        if(neighbors > 0)
         {
-            averageDirection /= neighbours;
-            return Vector3.Lerp(_direction, averageDirection, Time.deltaTime);
+            //Calcula la nueva posición de cohesión
+            averagePosition /= neighbors;
+            averagePosition = Vector3.Lerp(Vector3.zero, averagePosition, averagePosition.magnitude / _cubeProperties.actionRadius);
+
+            //Calcula la nueva dirección para el alineamiento
+            averageDirection /= neighbors;
+            averageDirection = Vector3.Lerp(_direction, averageDirection, Time.deltaTime);
         }
-        return Vector3.zero;
+
+        neighbors = 0;
+
+        //Busca el promedio de separación
+        foreach(Collider cubeCollider in evadeRadius)
+        {
+            averageSeparation += cubeCollider.transform.position - transform.position;
+            if (cubeCollider != this.gameObject.GetComponent<Collider>())
+                neighbors++;
+        }
+
+        if(neighbors > 0)
+        {
+            //Calcula la nueva posición de separación
+            averageSeparation /= neighbors;
+            averageSeparation = Vector3.Lerp(Vector3.zero, averagePosition, (averagePosition.magnitude / _cubeProperties.evadeRadius)) * _cubeProperties.repulsionForce;
+        }
+
+        return averagePosition + averageDirection - averageSeparation;
     }
 
     /// <summary>
-    /// Retorna un vector de qué tanto se debe separar un cubo de otro cuando ambos se encuentran demasiado cerca
+    /// Crea un vector que devuelve la nueva dirección del cubo en caso de encontrar una dirección
+    /// donde no hayan colisiones con un obstaculo mediante un rayo
+    /// Código tomado de: https://github.com/SebLague/Boids/blob/master/Assets/Scripts/Boid.cs
     /// </summary>
-    private Vector3 Separation()
+    private Vector3 BoundaryRepulsion()
     {
-        Collider[] evadeRadius = Physics.OverlapSphere(transform.position, _cubeProperties.evadeRadius, _cubeProperties.evadeLayer);
-        int neighbours = 0;
-        Vector3 averagePosition = Vector3.zero;
-        foreach (Collider cubeCollider in evadeRadius)
-        {
-            averagePosition += cubeCollider.transform.position - transform.position;
-            neighbours++;
-        }
-        
-        if (neighbours > 0)
-        {
-            averagePosition /= neighbours;
-            return Vector3.Lerp(Vector3.zero, averagePosition, (averagePosition.magnitude / _cubeProperties.evadeRadius)) * _cubeProperties.repulsionForce;
-        }
-        return Vector3.zero;
-    }
+        Vector3[] rayDirections = CubeObstacleView.directions;
 
-    //private Vector3 BoundaryRepulsion()
-    //{
-    //    if(_direction.magnitude > _cubeProperties.boundaryRadius)
-    //    {
-    //        return transform.position.normalized * (_cubeProperties.boundaryRadius - transform.position.magnitude) * Time.deltaTime;
-    //    }
-    //    return Vector3.zero;
-    //}
+        for (int i = 0; i < rayDirections.Length; i++)
+        {
+            Vector3 dir = transform.TransformDirection(rayDirections[i]);
+            Ray ray = new Ray(transform.position, dir);
+            if (!Physics.SphereCast(ray, _cubeProperties.boundaryRadius, _cubeProperties.boundaryDetectDistance, _cubeProperties.evadeLayer))
+            {
+                return dir;
+            }
+        }
+        return transform.forward;
+    }
+}
+
+/// <summary>
+/// Clase tomada de: https://github.com/SebLague/Boids/blob/master/Assets/Scripts/BoidHelper.cs
+/// En esta clase se crea un array de vectores similares a un cono de visión para el cubo
+/// </summary>
+public static class CubeObstacleView
+{
+    const int numViewDirections = 300;
+    public static readonly Vector3[] directions;
+
+    static CubeObstacleView()
+    {
+        directions = new Vector3[numViewDirections];
+
+        float goldenRatio = (1 + Mathf.Sqrt(5)) / 2;
+        float angleIncrement = Mathf.PI * 2 * goldenRatio;
+
+        for (int i = 0; i < numViewDirections; i++)
+        {
+            float t = (float)i / numViewDirections;
+            float inclination = Mathf.Acos(1 - 2 * t);
+            float azimuth = angleIncrement * i;
+
+            float x = Mathf.Sin(inclination) * Mathf.Cos(azimuth);
+            float y = Mathf.Sin(inclination) * Mathf.Sin(azimuth);
+            float z = Mathf.Cos(inclination);
+            directions[i] = new Vector3(x, y, z);
+        }
+    }
 }

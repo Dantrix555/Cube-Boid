@@ -14,9 +14,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   speed: 5
   repulsionForce: 3
+  boundaryDetectDistance: 4
   actionRadius: 10
   evadeRadius: 5
-  boundaryRadius: 15
+  boundaryRadius: 5
   layerMask:
     serializedVersion: 2
     m_Bits: 256
